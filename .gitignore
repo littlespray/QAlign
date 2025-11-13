@@ -1,0 +1,5 @@
+*egg-info/*
+outputs/*
+eval_outputs/*
+IE-R1-4K
+model_zoo

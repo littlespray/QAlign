@@ -3,12 +3,14 @@ import warnings
 from functools import partial
 from typing import List, Optional, Tuple, Union
 
+from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
+
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
-
-
+import logging
+logger = logging.getLogger(__name__)
 import copy
 import os
 import sys
@@ -18,6 +20,7 @@ sys.path.insert(0, dir_path)
 
 import transformers
 from transformers.models.llama.modeling_llama import *
+from transformers.modeling_outputs import *
 
 def _get_unpad_data(attention_mask):
     seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
@@ -228,7 +231,7 @@ class LlamaFlashAttention2(LlamaAttention):
         modality_indicators: torch.Tensor,
         attention_mask: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
+        past_key_value = None,
         output_attentions: bool = False,
         use_cache: bool = False,
         **kwargs,
@@ -425,7 +428,7 @@ class LlamaSdpaAttention(LlamaAttention):
         modality_indicators: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
+        past_key_value = None,
         output_attentions: bool = False,
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
