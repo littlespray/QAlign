@@ -245,3 +245,22 @@ def _create_4d_causal_attention_mask(
     )
 
     return attention_mask
+
+def _prepare_4d_causal_attention_mask_for_sdpa(
+    attention_mask: Optional[torch.Tensor],
+    input_shape: Union[torch.Size, Tuple, List],
+    inputs_embeds: torch.Tensor,
+    past_key_values_length: int,
+    sliding_window: Optional[int] = None,
+):
+    """
+    SDPA-compatible wrapper that prepares a 4D causal attention mask.
+    Currently aligns with `_prepare_4d_causal_attention_mask`.
+    """
+    return _prepare_4d_causal_attention_mask(
+        attention_mask=attention_mask,
+        input_shape=input_shape,
+        inputs_embeds=inputs_embeds,
+        past_key_values_length=past_key_values_length,
+        sliding_window=sliding_window,
+    )

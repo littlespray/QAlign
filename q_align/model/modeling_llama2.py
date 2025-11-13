@@ -37,7 +37,7 @@ def _get_unpad_data(attention_mask):
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 
-from .modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
+from .modeling_attn_mask_utils import _prepare_4d_causal_attention_mask, _prepare_4d_causal_attention_mask_for_sdpa
 from .configuration_mplug_owl2 import LlamaConfig
 
 class MultiwayNetwork(nn.Module):
