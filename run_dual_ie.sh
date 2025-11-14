@@ -1,8 +1,8 @@
 #!/bin/bash
 LOAD='MAGAer13/mplug-owl2-llama2-7b'
 
-DATA_FILE=./IE-R1-train-traindst.json
-DUAL_IMAGE_MODE=False
+DATA_FILE=./IE-R1-train-dual.json
+DUAL_IMAGE_MODE=True
 
 deepspeed --master_port 25801 q_align/train/train_mem.py \
     --deepspeed ./scripts/zero3.json \

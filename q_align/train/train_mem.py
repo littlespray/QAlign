@@ -61,6 +61,7 @@ class DataArguments:
                            metadata={"help": "Path to the training data."})
     lazy_preprocess: bool = False
     is_multimodal: bool = False
+    dual_image_mode: bool = False
     image_folder: Optional[str] = field(default=None)
     image_aspect_ratio: str = 'square'
     image_grid_pinpoints: Optional[str] = field(default=None)
@@ -578,8 +579,22 @@ class LazySupervisedDataset(Dataset):
                 if isinstance(i, int):
                     sources = [sources]
                 assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
-                if 'image' in sources[0]:
-                    image_file = self.list_data_dict[i]['image']
+                if ('image' in sources[0]) or (self.data_args.dual_image_mode and ('src_image' in sources[0] or 'edited_image' in sources[0])):
+                    sample = self.list_data_dict[i]
+                    # Resolve possible image specifications:
+                    # 1) 'src_image' + 'edited_image'
+                    # 2) 'image' as dict: {'src': ..., 'edited': ...}
+                    # 3) 'image' as list: [src, edited] or multi-frames
+                    # 4) 'image' as single path
+                    image_file = None
+                    if self.data_args.dual_image_mode and ('src_image' in sample and 'edited_image' in sample):
+                        image_file = [sample['src_image'], sample['edited_image']]
+                    else:
+                        img_entry = sample.get('image')
+                        if self.data_args.dual_image_mode and isinstance(img_entry, dict) and 'src' in img_entry and 'edited' in img_entry:
+                            image_file = [img_entry['src'], img_entry['edited']]
+                        else:
+                            image_file = img_entry
 
                     image_folder = self.data_args.image_folder
                     processor = self.data_args.image_processor
@@ -620,9 +635,36 @@ class LazySupervisedDataset(Dataset):
                             image = processor.preprocess(image, return_tensors='pt')['pixel_values']
                         else:
                             image = processor.preprocess(image, return_tensors='pt')['pixel_values']
-                    sources = preprocess_multimodal(
-                        copy.deepcopy([e["conversations"] for e in sources]),
-                        self.data_args)
+                    if self.data_args.dual_image_mode:
+                        # Build/adjust conversations for dual-image + instruction use-case if applicable
+                        conv_list = copy.deepcopy([e["conversations"] for e in sources])
+                        # Use 'instruction' if present to create the human prompt with two images
+                        instruction = sample.get('instruction', None)
+                        if instruction is not None:
+                            # Ensure exactly two image tokens for src and edited
+                            human_text = f"{instruction} {DEFAULT_IMAGE_TOKEN}{DEFAULT_IMAGE_TOKEN}"
+                            if len(conv_list[0]) > 0 and conv_list[0][0].get("from") == "human":
+                                conv_list[0][0]["value"] = human_text
+                            else:
+                                conv_list[0].insert(0, {"from": "human", "value": human_text})
+                        else:
+                            # If exactly two images provided but prompt has a different number of tokens, normalize to 2
+                            if isinstance(image_file, list) and len(image_file) == 2:
+                                if len(conv_list[0]) > 0 and conv_list[0][0].get("from") == "human":
+                                    original = conv_list[0][0]["value"]
+                                    # Strip existing image tokens; keep textual prefix
+                                    text_part = original.split(DEFAULT_IMAGE_TOKEN)[0].strip()
+                                    if text_part == "":
+                                        text_part = "How would you rate the quality given source and edited images?"
+                                    conv_list[0][0]["value"] = f"{text_part} {DEFAULT_IMAGE_TOKEN}{DEFAULT_IMAGE_TOKEN}"
+                        sources = preprocess_multimodal(
+                            conv_list,
+                            self.data_args)
+                    else:
+                        # Original behavior
+                        sources = preprocess_multimodal(
+                            copy.deepcopy([e["conversations"] for e in sources]),
+                            self.data_args)
                 else:
 
                     sources = copy.deepcopy([e["conversations"] for e in sources])

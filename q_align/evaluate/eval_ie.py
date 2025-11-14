@@ -103,22 +103,10 @@ def main(args):
 
     conv_mode = "mplug_owl2"
     
-    inp = "How would you rate the quality of this video?"
-        
-    conv = conv_templates[conv_mode].copy()
-    inp =  inp + "\n" + DEFAULT_IMAGE_TOKEN
-    conv.append_message(conv.roles[0], inp)
-    image = None
-        
-    conv.append_message(conv.roles[1], None)
-    prompt = conv.get_prompt() + " The quality of the video is"
-    
     toks = ["good", "poor", "high", "fair", "low", "excellent", "bad", "fine", "moderate",  "decent", "average", "medium", "acceptable"]
     print(toks)
     ids_ = [id_[1] for id_ in tokenizer(toks)["input_ids"]]
     print(ids_)
-
-    input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(args.device)
     
     for image_path, json_ in zip(image_paths, jsons):
         with open(json_) as f:
@@ -127,13 +115,28 @@ def main(args):
             image_tensors = []
             batch_data = []
             prs, gts = [], []
+            input_ids_list = []
             for i, llddata in enumerate(tqdm(iqadata, desc="Evaluating [{}]".format(json_.split("/")[-1]))):
-                filename = llddata["image"]
+                # Build per-sample prompt
+                conv = conv_templates[conv_mode].copy()
+                if args.dual_image_mode:
+                    instruction = llddata.get("instruction", None)
+                    if instruction is None:
+                        base_q = "How would you rate the quality given source and edited images?"
+                    else:
+                        base_q = instruction
+                    human_msg = base_q + "\n" + DEFAULT_IMAGE_TOKEN + DEFAULT_IMAGE_TOKEN
+                else:
+                    base_q = "How would you rate the quality of this video?"
+                    human_msg = base_q + "\n" + DEFAULT_IMAGE_TOKEN
+                conv.append_message(conv.roles[0], human_msg)
+                conv.append_message(conv.roles[1], None)
+                prompt = conv.get_prompt() + " The quality of the video is"
+                cur_input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').to(args.device)
+                input_ids_list.append(cur_input_ids)
                 llddata["logits"] = defaultdict(float)
                 
-                
-                
-                image = load_image(image_path + filename)
+                # Load image(s)
                 def expand2square(pil_img, background_color):
                         width, height = pil_img.size
                         if width == height:
@@ -146,16 +149,52 @@ def main(args):
                             result = Image.new(pil_img.mode, (height, height), background_color)
                             result.paste(pil_img, ((height - width) // 2, 0))
                             return result
-                image = expand2square(image, tuple(int(x*255) for x in image_processor.image_mean))
-                image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half().to(args.device)
-
-                image_tensors.append(image_tensor)
+                if args.dual_image_mode:
+                    # Resolve file spec: src/edited, dict, list, fallback to single
+                    sample = llddata
+                    img_spec = None
+                    if "src_image" in sample and "edited_image" in sample:
+                        img_spec = [sample["src_image"], sample["edited_image"]]
+                    else:
+                        img_entry = sample.get("image")
+                        if isinstance(img_entry, dict) and "src" in img_entry and "edited" in img_entry:
+                            img_spec = [img_entry["src"], img_entry["edited"]]
+                        else:
+                            img_spec = img_entry
+                    if isinstance(img_spec, list) and len(img_spec) == 2:
+                        imgs = [load_image(image_path + fn) for fn in img_spec]
+                        imgs = [expand2square(im, tuple(int(x*255) for x in image_processor.image_mean)) for im in imgs]
+                        tens = image_processor.preprocess(imgs, return_tensors='pt')['pixel_values'].half().to(args.device)
+                        # tens shape: (2, C, H, W)
+                        image_tensors.append(tens)
+                    else:
+                        # fallback single
+                        filename = img_spec
+                        image = load_image(image_path + filename)
+                        image = expand2square(image, tuple(int(x*255) for x in image_processor.image_mean))
+                        image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half().to(args.device)
+                        image_tensors.append(image_tensor)
+                else:
+                    filename = llddata["image"]
+                    image = load_image(image_path + filename)
+                    image = expand2square(image, tuple(int(x*255) for x in image_processor.image_mean))
+                    image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half().to(args.device)
+                    image_tensors.append(image_tensor)
                 batch_data.append(llddata)
 
                 if i % 8 == 7 or i == len(iqadata) - 1:                     
                     with torch.inference_mode():
-                        output_logits = model(input_ids.repeat(len(image_tensors), 1),
-                            images=torch.cat(image_tensors, 0))["logits"][:,-1]
+                        # Pad input ids
+                        from torch.nn.utils.rnn import pad_sequence
+                        pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+                        batch_input_ids = pad_sequence(input_ids_list, batch_first=True, padding_value=pad_id)
+                        if not args.dual_image_mode:
+                            output_logits = model(batch_input_ids,
+                                images=torch.cat(image_tensors, 0))["logits"][:,-1]
+                        else:
+                            # images is a list of per-sample tensors, handled by model
+                            output_logits = model(batch_input_ids,
+                                images=image_tensors)["logits"][:,-1]
     
                     for j, xllddata in enumerate(batch_data):
                         for tok, id_ in zip(toks, ids_):
@@ -170,6 +209,7 @@ def main(args):
 
                     image_tensors = []
                     batch_data = []
+                    input_ids_list = []
                     
             prs=rescale(prs,gts)
             print("Spearmanr", spearmanr(prs,gts)[0], "Pearson", pearsonr(prs,gts)[0],"Kendallr",kendallr(prs,gts)[0])
@@ -189,5 +229,6 @@ if __name__ == "__main__":
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--image-aspect-ratio", type=str, default='pad')
+    parser.add_argument("--dual-image-mode", action="store_true")
     args = parser.parse_args()
     main(args)
