@@ -10,11 +10,11 @@ import copy
 # txt_file_path = '/userhome/hunyuan_video2.txt'
 # json_file_path = '/userhome/hunyuan-test.json'
 
-txt_file_path = './IE-R1-4K/train.txt'
-json_file_path = './IE-R11-train-dual.json'
+# txt_file_path = './IE-R1-4K/train.txt'
+# json_file_path = './IE-R1-train-dual.json'
 
-# txt_file_path = './IE-R1-4K/val.txt'
-# json_file_path = './IE-R1-val-traindst.json'
+txt_file_path = './IE-R1-4K/val.txt'
+json_file_path = './IE-R1-val-dual.json'
 
 # 初始化一个空列表来存储字典
 data_list = []

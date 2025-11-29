@@ -117,23 +117,6 @@ def main(args):
             prs, gts = [], []
             input_ids_list = []
             for i, llddata in enumerate(tqdm(iqadata, desc="Evaluating [{}]".format(json_.split("/")[-1]))):
-                # Build per-sample prompt
-                conv = conv_templates[conv_mode].copy()
-                if args.dual_image_mode:
-                    instruction = llddata.get("instruction", None)
-                    if instruction is None:
-                        base_q = "How would you rate the quality given source and edited images?"
-                    else:
-                        base_q = instruction
-                    human_msg = base_q + "\n" + DEFAULT_IMAGE_TOKEN + DEFAULT_IMAGE_TOKEN
-                else:
-                    base_q = "How would you rate the quality of this video?"
-                    human_msg = base_q + "\n" + DEFAULT_IMAGE_TOKEN
-                conv.append_message(conv.roles[0], human_msg)
-                conv.append_message(conv.roles[1], None)
-                prompt = conv.get_prompt() + " The quality of the video is"
-                cur_input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').to(args.device)
-                input_ids_list.append(cur_input_ids)
                 llddata["logits"] = defaultdict(float)
                 
                 # Load image(s)
@@ -149,6 +132,7 @@ def main(args):
                             result = Image.new(pil_img.mode, (height, height), background_color)
                             result.paste(pil_img, ((height - width) // 2, 0))
                             return result
+                num_images_for_prompt = 1
                 if args.dual_image_mode:
                     # Resolve file spec: src/edited, dict, list, fallback to single
                     sample = llddata
@@ -165,8 +149,9 @@ def main(args):
                         imgs = [load_image(image_path + fn) for fn in img_spec]
                         imgs = [expand2square(im, tuple(int(x*255) for x in image_processor.image_mean)) for im in imgs]
                         tens = image_processor.preprocess(imgs, return_tensors='pt')['pixel_values'].half().to(args.device)
-                        # tens shape: (2, C, H, W)
+                        # Per-sample tensor with 2 images
                         image_tensors.append(tens)
+                        num_images_for_prompt = 2
                     else:
                         # fallback single
                         filename = img_spec
@@ -174,15 +159,35 @@ def main(args):
                         image = expand2square(image, tuple(int(x*255) for x in image_processor.image_mean))
                         image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half().to(args.device)
                         image_tensors.append(image_tensor)
+                        num_images_for_prompt = 1
                 else:
                     filename = llddata["image"]
                     image = load_image(image_path + filename)
                     image = expand2square(image, tuple(int(x*255) for x in image_processor.image_mean))
                     image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half().to(args.device)
                     image_tensors.append(image_tensor)
+                    num_images_for_prompt = 1
+
+                # Build per-sample prompt AFTER knowing how many images we will feed
+                conv = conv_templates[conv_mode].copy()
+                if args.dual_image_mode:
+                    instruction = llddata.get("instruction", None)
+                    if instruction is None:
+                        base_q = "How would you rate the quality given source and edited images?"
+                    else:
+                        base_q = instruction
+                    human_msg = base_q + "\n" + (DEFAULT_IMAGE_TOKEN * num_images_for_prompt)
+                else:
+                    base_q = "How would you rate the quality of this image?"
+                    human_msg = base_q + "\n" + DEFAULT_IMAGE_TOKEN
+                conv.append_message(conv.roles[0], human_msg)
+                conv.append_message(conv.roles[1], None)
+                prompt = conv.get_prompt() + " The quality of the image is"
+                cur_input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').to(args.device)
+                input_ids_list.append(cur_input_ids)
                 batch_data.append(llddata)
 
-                if i % 8 == 7 or i == len(iqadata) - 1:                     
+                if True:                     
                     with torch.inference_mode():
                         # Pad input ids
                         from torch.nn.utils.rnn import pad_sequence
@@ -192,7 +197,7 @@ def main(args):
                             output_logits = model(batch_input_ids,
                                 images=torch.cat(image_tensors, 0))["logits"][:,-1]
                         else:
-                            # images is a list of per-sample tensors, handled by model
+                            # images is a list of per-sample tensors (each may have 1 or 2 images), handled by model
                             output_logits = model(batch_input_ids,
                                 images=image_tensors)["logits"][:,-1]
     
@@ -204,7 +209,7 @@ def main(args):
                         prs.append(xllddata["score"])
                         gts.append(xllddata["gt_score"])
                         json_ = json_.replace("combined/", "combined-")
-                        with open(f"results/{args.model_path}/{json_.split('/')[-1]}", "a") as wf:
+                        with open(f"eval_outputs/{os.path.basename(args.model_path)}/{json_.split('/')[-1]}", "a") as wf:
                             json.dump(xllddata, wf)
 
                     image_tensors = []

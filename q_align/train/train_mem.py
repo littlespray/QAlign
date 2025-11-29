@@ -371,7 +371,9 @@ def preprocess_v1(
 
             if has_image:
                 round_len = len(tokenizer_image_token(rou, tokenizer))
-                instruction_len = len(tokenizer_image_token(parts[0], tokenizer)) - 3
+                # Dynamically account for multiple <|image|> tokens in the human prompt
+                num_image_tokens = parts[0].count(DEFAULT_IMAGE_TOKEN)
+                instruction_len = len(tokenizer_image_token(parts[0], tokenizer)) - (2 + num_image_tokens)
             else:
                 round_len = len(tokenizer(rou).input_ids)
                 instruction_len = len(tokenizer(parts[0]).input_ids) - 2
